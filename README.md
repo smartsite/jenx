@@ -1,6 +1,6 @@
 # Jen-X
 
-**Ultralite Jenkins™ — Foundd release control**
+**Ultralite Jenkins™ release control**
 
 Jen-X is a deliberately small release controller for the Foundd application.
 
