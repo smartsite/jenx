@@ -2,9 +2,9 @@
 
 **Ultralite Jenkins™ release control**
 
-Jen-X is a deliberately small release controller for the Foundd application.
+Jen-X is a deliberately small release controller for a node/express/vite application.
 
-It provides a simple, auditable way to deploy a specific Git commit to the Foundd UAT environment, run the release checks, restart the application, verify its health, and record the result.
+It provides a simple, auditable way to deploy a specific Git commit to a  UAT environment, run the release checks, restart the application, verify its health, and record the result.
 
 It is **not intended to be a general-purpose CI/CD system**.
 
@@ -50,8 +50,8 @@ Release history is stored as newline-delimited JSON (NDJSON).
 Jen-X lives separately from the Foundd application:
 
 ```text
-/var/www/xsmart.site/
-├── foundd/
+/var/www/webroot/
+├── appname/
 └── jenx/
     ├── index.php
     ├── jenx-release.sh
@@ -68,7 +68,7 @@ Jen-X lives separately from the Foundd application:
 From the Jen-X directory:
 
 ```bash
-cd /var/www/xsmart.site/jenx
+cd /var/www/webroot/jenx
 ./jenx-release.sh <git-ref>
 ```
 
@@ -136,7 +136,7 @@ The Foundd service restart is permitted through a narrowly scoped sudoers rule s
 The release script uses:
 
 ```bash
-sudo -n systemctl restart foundd.service
+sudo -n systemctl restart appname.service
 ```
 
 `-n` ensures the script fails rather than waiting for an interactive sudo password if the permission is missing.
@@ -146,10 +146,10 @@ sudo -n systemctl restart foundd.service
 Jen-X's read-only dashboard is available at:
 
 ```text
-https://foundd.xsmart.site/jenx/
+https://mywebthingy.site/jenx/
 ```
 
-Access is protected by the Foundd/UAT nginx HTTP authentication.
+Access is protected by the nginx HTTP authentication.
 
 ## Design principles
 
