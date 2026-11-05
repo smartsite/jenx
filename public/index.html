@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Jen-X | Build Dashboard</title>
+    <link rel="stylesheet" href="/assets/jenx.css">
+    <script src="/assets/jenx.js" defer></script>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark">JX</span>
+            <div>
+                <h1>Jen-X</h1>
+                <p>Build controller</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <span id="connection" class="connection">Connecting…</span>
+            <button id="refresh" class="button secondary" type="button">
+                Refresh
+            </button>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="page-heading">
+            <div>
+                <p class="eyebrow">PORTABLE RELEASE PIPELINE</p>
+                <h2>Build dashboard</h2>
+                <p class="muted">
+                    Read-only view of build requests and verified results.
+                </p>
+            </div>
+            <span class="readonly-label">READ ONLY</span>
+        </section>
+
+        <section class="summary-grid" aria-label="Build summary">
+            <article class="summary-card">
+                <span>Total builds</span>
+                <strong id="total-builds">—</strong>
+                <small>Most recent 50 records</small>
+            </article>
+            <article class="summary-card">
+                <span>Successful</span>
+                <strong id="successful-builds">—</strong>
+                <small>Verified results</small>
+            </article>
+            <article class="summary-card">
+                <span>In progress</span>
+                <strong id="active-builds">—</strong>
+                <small>Non-terminal requests</small>
+            </article>
+            <article class="summary-card">
+                <span>Failed builds</span>
+                <strong id="failed-builds">—</strong>
+                <small>Rejected or failed requests</small>
+            </article>
+            <article class="summary-card">
+                <span>Needs reconciliation</span>
+                <strong id="reconciliation-builds">—</strong>
+                <small>Requires investigation</small>
+            </article>
+        </section>
+
+        <section class="panel">
+            <div class="panel-heading">
+                <div>
+                    <h3>Build history</h3>
+                    <p class="muted">Select a build to inspect its details.</p>
+                </div>
+                <span id="last-updated" class="muted small">Not yet updated</span>
+            </div>
+
+            <div class="filters">
+                <label>
+                    <span>Search</span>
+                    <input id="search" type="search"
+                           placeholder="Tag, commit or request ID">
+                </label>
+                <label>
+                    <span>Status</span>
+                    <select id="status-filter">
+                        <option value="">All statuses</option>
+                        <option>PREPARED</option>
+                        <option>DISPATCHING</option>
+                        <option>DISPATCHED</option>
+                        <option>RUNNING</option>
+                        <option>VERIFYING</option>
+                        <option>SUCCEEDED</option>
+                        <option>DISPATCH_REJECTED</option>
+                        <option>BUILD_FAILED</option>
+                        <option>RESULT_REJECTED</option>
+                        <option>RECONCILIATION_REQUIRED</option>
+                    </select>
+                </label>
+                <label>
+                    <span>Build type</span>
+                    <select id="type-filter">
+                        <option value="">All types</option>
+                        <option value="test">Test only</option>
+                        <option value="release">Release build</option>
+                    </select>
+                </label>
+            </div>
+
+            <div id="error-message" class="error-message" hidden></div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Release tag</th>
+                            <th>Type</th>
+                            <th>Updated / state age</th>
+                            <th>Source commit</th>
+                        </tr>
+                    </thead>
+                    <tbody id="build-rows">
+                        <tr>
+                            <td colspan="5" class="empty-state">
+                                Loading build records…
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="record-count" class="table-footer"></div>
+        </section>
+
+        <section id="detail-panel" class="panel detail-panel" hidden>
+            <div class="panel-heading">
+                <div>
+                    <p class="eyebrow">SELECTED REQUEST</p>
+                    <h3 id="detail-title">Build details</h3>
+                </div>
+                <button id="close-detail" class="button secondary"
+                        type="button">Close</button>
+            </div>
+
+            <div id="detail-content" class="detail-grid"></div>
+            <div id="result-section" class="result-section" hidden>
+                <h4>Verified image result</h4>
+                <div id="result-content" class="detail-grid"></div>
+            </div>
+        </section>
+
+        <footer class="footer">
+            <span>Jen-X · Local build controller</span>
+            <span>Read-only · No build actions available</span>
+        </footer>
+    </main>
+</body>
+</html>

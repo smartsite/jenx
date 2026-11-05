@@ -1,0 +1,42 @@
+services:
+  collector:
+    build:
+      context: .
+      dockerfile: collector.Dockerfile
+
+    # The runner is one-shot. No restart policy or container scheduler.
+    init: true
+    restart: "no"
+
+    # Match the host's www-data UID/GID.
+    user: "33:33"
+
+    # Permit read access to /etc/jenx/jenx.env, which is group-readable
+    # by the host's jenx-config group (GID 991).
+    group_add:
+      - "991"
+
+    # The config is read-only; initial tests use isolated state.
+    volumes:
+      - type: bind
+        source: /etc/jenx/jenx.env
+        target: /etc/jenx/jenx.env
+        read_only: true
+        bind:
+          create_host_path: false
+
+      - type: bind
+        source: /var/www/jenx-test/state/builds
+        target: /var/www/jenx/state/builds
+        bind:
+          create_host_path: false
+
+    # The application image and root filesystem remain read-only.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

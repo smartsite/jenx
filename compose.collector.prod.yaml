@@ -1,0 +1,34 @@
+services:
+  collector:
+    build:
+      context: .
+      dockerfile: collector.Dockerfile
+
+    init: true
+    restart: "no"
+    user: "33:33"
+    group_add:
+      - "991"
+
+    volumes:
+      - type: bind
+        source: /etc/jenx/jenx.env
+        target: /etc/jenx/jenx.env
+        read_only: true
+        bind:
+          create_host_path: false
+
+      - type: bind
+        source: /var/www/jenx/state/builds
+        target: /var/www/jenx/state/builds
+        bind:
+          create_host_path: false
+
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

@@ -1,0 +1,22 @@
+# Persistent and test state
+state/
+state-test/
+logs/
+
+# Web tier and static assets
+public/
+
+# Tests and test-only scripts
+*test*.php
+_jenx-collect.php
+
+# Local configuration and environment files
+.env
+.env.*
+*.env
+
+# Repository and editor files
+.git/
+.gitignore
+.vscode/
+.idea/
