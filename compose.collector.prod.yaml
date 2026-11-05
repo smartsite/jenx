@@ -1,8 +1,6 @@
 services:
   collector:
-    build:
-      context: .
-      dockerfile: collector.Dockerfile
+    image: ghcr.io/smartsite/jenx-collector@sha256:5fb74ef0d8ac2172322aca25113b36f80b7b0a8041de6ef73b1031c642ee9702
 
     init: true
     restart: "no"
