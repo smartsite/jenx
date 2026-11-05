@@ -1,0 +1,52 @@
+name: Build and Publish Jen-X Collector
+
+on:
+  push:
+    branches:
+      - jenx-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/smartsite/jenx-collector
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: |
+          docker build \
+            --file collector.Dockerfile \
+            --tag "${IMAGE_NAME}:${GITHUB_SHA}" \
+            .
+
+      - name: Smoke test image
+        run: |
+          docker run --rm \
+            --entrypoint php \
+            "${IMAGE_NAME}:${GITHUB_SHA}" \
+            -v
+
+      - name: Push immutable commit tag
+        run: |
+          docker push "${IMAGE_NAME}:${GITHUB_SHA}"
+
+      - name: Inspect published digest
+        run: |
+          docker buildx imagetools inspect \
+            "${IMAGE_NAME}:${GITHUB_SHA}"
