@@ -17,6 +17,17 @@
                 <p>Build controller</p>
             </div>
         </div>
+        <nav class="main-nav" aria-label="Jen-X">
+            <button class="nav-link active" type="button" data-view="releases">
+                Releases
+            </button>
+            <button class="nav-link" type="button" data-view="deployments">
+                Deployments
+            </button>
+            <button class="nav-link" type="button" data-view="history">
+                History
+            </button>
+        </nav>
         <div class="header-right">
             <span id="connection" class="connection">Connecting…</span>
             <button id="refresh" class="button secondary" type="button">
@@ -26,133 +37,284 @@
     </header>
 
     <main class="container">
-        <section class="page-heading">
-            <div>
-                <p class="eyebrow">PORTABLE RELEASE PIPELINE</p>
-                <h2>Build dashboard</h2>
-                <p class="muted">
-                    Read-only view of build requests and verified results.
-                </p>
-            </div>
-            <span class="readonly-label">READ ONLY</span>
-        </section>
-
-        <section class="summary-grid" aria-label="Build summary">
-            <article class="summary-card">
-                <span>Total builds</span>
-                <strong id="total-builds">—</strong>
-                <small>Most recent 50 records</small>
-            </article>
-            <article class="summary-card">
-                <span>Successful</span>
-                <strong id="successful-builds">—</strong>
-                <small>Verified results</small>
-            </article>
-            <article class="summary-card">
-                <span>In progress</span>
-                <strong id="active-builds">—</strong>
-                <small>Non-terminal requests</small>
-            </article>
-            <article class="summary-card">
-                <span>Failed builds</span>
-                <strong id="failed-builds">—</strong>
-                <small>Rejected or failed requests</small>
-            </article>
-            <article class="summary-card">
-                <span>Needs reconciliation</span>
-                <strong id="reconciliation-builds">—</strong>
-                <small>Requires investigation</small>
-            </article>
-        </section>
-
-        <section class="panel">
-            <div class="panel-heading">
+        <div id="view-releases" class="app-view">
+            <section class="page-heading">
                 <div>
-                    <h3>Build history</h3>
-                    <p class="muted">Select a build to inspect its details.</p>
+                    <p class="eyebrow">PORTABLE RELEASE PIPELINE</p>
+                    <h2>Build dashboard</h2>
+                    <p class="muted">
+                        Read-only view of build requests and verified results.
+                    </p>
                 </div>
-                <span id="last-updated" class="muted small">Not yet updated</span>
-            </div>
+                <span class="readonly-label">READ ONLY</span>
+            </section>
 
-            <div class="filters">
-                <label>
-                    <span>Search</span>
-                    <input id="search" type="search"
-                           placeholder="Tag, commit or request ID">
-                </label>
-                <label>
-                    <span>Status</span>
-                    <select id="status-filter">
-                        <option value="">All statuses</option>
-                        <option>PREPARED</option>
-                        <option>DISPATCHING</option>
-                        <option>DISPATCHED</option>
-                        <option>RUNNING</option>
-                        <option>VERIFYING</option>
-                        <option>SUCCEEDED</option>
-                        <option>DISPATCH_REJECTED</option>
-                        <option>BUILD_FAILED</option>
-                        <option>RESULT_REJECTED</option>
-                        <option>RECONCILIATION_REQUIRED</option>
-                    </select>
-                </label>
-                <label>
-                    <span>Build type</span>
-                    <select id="type-filter">
-                        <option value="">All types</option>
-                        <option value="test">Test only</option>
-                        <option value="release">Release build</option>
-                    </select>
-                </label>
-            </div>
+            <section class="summary-grid" aria-label="Build summary">
+                <article class="summary-card">
+                    <span>Total builds</span>
+                    <strong id="total-builds">—</strong>
+                    <small>Most recent 50 records</small>
+                </article>
+                <article class="summary-card">
+                    <span>Successful</span>
+                    <strong id="successful-builds">—</strong>
+                    <small>Verified results</small>
+                </article>
+                <article class="summary-card">
+                    <span>In progress</span>
+                    <strong id="active-builds">—</strong>
+                    <small>Non-terminal requests</small>
+                </article>
+                <article class="summary-card">
+                    <span>Failed builds</span>
+                    <strong id="failed-builds">—</strong>
+                    <small>Rejected or failed requests</small>
+                </article>
+                <article class="summary-card">
+                    <span>Needs reconciliation</span>
+                    <strong id="reconciliation-builds">—</strong>
+                    <small>Requires investigation</small>
+                </article>
+            </section>
 
-            <div id="error-message" class="error-message" hidden></div>
+            <section class="panel">
+                <div class="panel-heading">
+                    <div>
+                        <h3>Build history</h3>
+                        <p class="muted">Select a build to inspect its details.</p>
+                    </div>
+                    <span id="last-updated" class="muted small">Not yet updated</span>
+                </div>
 
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Status</th>
-                            <th>Release tag</th>
-                            <th>Type</th>
-                            <th>Updated / state age</th>
-                            <th>Source commit</th>
-                        </tr>
-                    </thead>
-                    <tbody id="build-rows">
-                        <tr>
-                            <td colspan="5" class="empty-state">
-                                Loading build records…
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+                <div class="filters">
+                    <label>
+                        <span>Search</span>
+                        <input id="search" type="search"
+                            placeholder="Tag, commit or request ID">
+                    </label>
+                    <label>
+                        <span>Status</span>
+                        <select id="status-filter">
+                            <option value="">All statuses</option>
+                            <option>PREPARED</option>
+                            <option>DISPATCHING</option>
+                            <option>DISPATCHED</option>
+                            <option>RUNNING</option>
+                            <option>VERIFYING</option>
+                            <option>SUCCEEDED</option>
+                            <option>DISPATCH_REJECTED</option>
+                            <option>BUILD_FAILED</option>
+                            <option>RESULT_REJECTED</option>
+                            <option>RECONCILIATION_REQUIRED</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>Build type</span>
+                        <select id="type-filter">
+                            <option value="">All types</option>
+                            <option value="test">Test only</option>
+                            <option value="release">Release build</option>
+                        </select>
+                    </label>
+                </div>
 
-            <div id="record-count" class="table-footer"></div>
-        </section>
+                <div id="error-message" class="error-message" hidden></div>
 
-        <section id="detail-panel" class="panel detail-panel" hidden>
-            <div class="panel-heading">
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Release tag</th>
+                                <th>Type</th>
+                                <th>Updated / state age</th>
+                                <th>Source commit</th>
+                            </tr>
+                        </thead>
+                        <tbody id="build-rows">
+                            <tr>
+                                <td colspan="5" class="empty-state">
+                                    Loading build records…
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div id="record-count" class="table-footer"></div>
+            </section>
+
+            <section id="detail-panel" class="panel detail-panel" hidden>
+                <div class="panel-heading">
+                    <div>
+                        <p class="eyebrow">SELECTED REQUEST</p>
+                        <h3 id="detail-title">Build details</h3>
+                    </div>
+                    <button id="close-detail" class="button secondary"
+                            type="button">Close</button>
+                </div>
+
+                <div id="detail-content" class="detail-grid"></div>
+                <div id="result-section" class="result-section" hidden>
+                    <h4>Verified image result</h4>
+                    <div id="result-content" class="detail-grid"></div>
+                </div>
+            </section>
+        </div>   
+       <section id="view-deployments" class="app-view" hidden>
+            <section class="page-heading">
                 <div>
-                    <p class="eyebrow">SELECTED REQUEST</p>
-                    <h3 id="detail-title">Build details</h3>
+                    <p class="eyebrow">IMMUTABLE RELEASE DEPLOYMENT</p>
+                    <h2>Deployments</h2>
+                    <p class="muted">
+                        Promote and roll back verified releases across environments.
+                    </p>
                 </div>
-                <button id="close-detail" class="button secondary"
-                        type="button">Close</button>
-            </div>
+            </section>
 
-            <div id="detail-content" class="detail-grid"></div>
-            <div id="result-section" class="result-section" hidden>
-                <h4>Verified image result</h4>
-                <div id="result-content" class="detail-grid"></div>
-            </div>
+            <section class="deployment-grid" aria-label="Deployment environments">
+
+               <article class="deployment-card" data-environment="dev">
+                    <div class="deployment-card-header">
+                        <div>
+                            <p class="eyebrow">DEVELOPMENT</p>
+                            <h3>DEV</h3>
+                        </div>
+                        <span class="deployment-status status-running">
+                            Running
+                        </span>
+                    </div>
+
+                    <div class="deployment-details">
+                        <div>
+                            <span>Release</span>
+                            <strong>v0.1.5</strong>
+                        </div>
+                        <div>
+                            <span>Source commit</span>
+                            <code>d45234a5</code>
+                        </div>
+                        <div>
+                            <span>Image digest</span>
+                            <code>sha256:318f8062…</code>
+                        </div>
+                        <div>
+                            <span>Health</span>
+                            <strong class="health-ok">Healthy</strong>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="deployment-card" data-environment="uat"> 
+                    <div class="deployment-card-header">
+                        <div>
+                            <p class="eyebrow">USER ACCEPTANCE TESTING</p>
+                            <h3>UAT</h3>
+                        </div>
+                        <span class="deployment-status status-pending">
+                            Not deployed
+                        </span>
+                    </div>
+
+                    <div class="deployment-details">
+                        <div>
+                            <span>Release</span>
+                            <strong>—</strong>
+                        </div>
+                        <div>
+                            <span>Source commit</span>
+                            <code>—</code>
+                        </div>
+                        <div>
+                            <span>Image digest</span>
+                            <code>—</code>
+                        </div>
+                        <div>
+                            <span>Health</span>
+                            <strong>—</strong>
+                        </div>
+                    </div>
+                </article>
+
+
+                <article class="deployment-card" data-environment="prod">
+                    <div class="deployment-card-header">
+                        <div>
+                            <p class="eyebrow">PRODUCTION</p>
+                            <h3>PROD</h3>
+                        </div>
+                        <span class="deployment-status status-pending">
+                            Not deployed
+                        </span>
+                    </div>
+
+                    <div class="deployment-details">
+                        <div>
+                            <span>Release</span>
+                            <strong>—</strong>
+                        </div>
+                        <div>
+                            <span>Source commit</span>
+                            <code>—</code>
+                        </div>
+                        <div>
+                            <span>Image digest</span>
+                            <code>—</code>
+                        </div>
+                        <div>
+                            <span>Health</span>
+                            <strong>—</strong>
+                        </div>
+                    </div>
+                </article>
+
+            </section>
+
+            <section class="panel">
+                <div class="panel-heading">
+                    <div>
+                        <h3>Deployment history</h3>
+                        <p class="muted">
+                            Recent promotions and rollbacks will appear here.
+                        </p>
+                    </div>
+                </div>
+
+                <div id="deployment-history" class="empty-state">
+                    No deployment history available yet.
+                </div>
+            </section>
         </section>
+        <section id="view-history" class="app-view" hidden>
+            <section class="page-heading">
+                <div>
+                    <p class="eyebrow">RELEASE &amp; DEPLOYMENT HISTORY</p>
+                    <h2>History</h2>
+                    <p class="muted">
+                        Shared history of releases, deployments and operational events.
+                    </p>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-heading">
+                    <div>
+                        <h3>Activity history</h3>
+                        <p class="muted">The shared release and deployment timeline will appear here.</p>
+                    </div>
+                </div>
+
+                <div class="empty-state">
+                    History view coming next.
+                </div>
+            </section>
+        </section>           
 
         <footer class="footer">
             <span>Jen-X · Local build controller</span>
             <span>Read-only · No build actions available</span>
         </footer>
+       
     </main>
 </body>
 </html>

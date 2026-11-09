@@ -1,4 +1,3 @@
-#!/usr/bin/env php
 <?php
 declare(strict_types=1);
 
@@ -113,7 +112,7 @@ function emitResult(array $result, bool $json): void
         echo "Container:   " . ($observed['container_state'] ?? 'unknown') . "\n";
         echo "Image:       " . ($observed['image'] ?? 'unknown') . "\n";
         echo "Digest:      " . ($observed['digest'] ?? 'unknown') . "\n";
-        echo "Health:      " . ($observed['health'] ?? 'unknown') . "\n";
+        echo "Health:      " . (($observed['application_healthy'] ?? false) ? 'healthy' : 'unhealthy') . "\n";
 
         return;
     }
@@ -316,6 +315,107 @@ function getContainerName(string $deploymentDir): string
     return $containerId;
 }
 
+function ensurePostgresHealthy(string $deploymentDir, int $timeoutSeconds = 60): void
+{
+    $output = [];
+    $exitCode = 0;
+
+    // Ensure the independently managed PostgreSQL service exists.
+    if (
+        !runCommand(
+            composeCommand(
+                $deploymentDir,
+                [
+                    'up',
+                    '-d',
+                    'postgres',
+                ]
+            ),
+            $deploymentDir,
+            $output,
+            $exitCode
+        ) ||
+        $exitCode !== 0
+    ) {
+        throw new RuntimeException(
+            'Unable to start PostgreSQL: ' .
+            (
+                ($output['stderr'] ?? '') !== ''
+                    ? $output['stderr']
+                    : ($output['stdout'] ?? 'unknown error')
+            )
+        );
+    }
+
+    // Wait until PostgreSQL reports healthy.
+    $deadline = time() + $timeoutSeconds;
+
+    do {
+        $output = [];
+        $exitCode = 0;
+
+        if (
+            runCommand(
+                composeCommand(
+                    $deploymentDir,
+                    [
+                        'ps',
+                        '-q',
+                        'postgres',
+                    ]
+                ),
+                $deploymentDir,
+                $output,
+                $exitCode
+            ) &&
+            $exitCode === 0
+        ) {
+            $containerId = trim($output['stdout']);
+
+            if ($containerId !== '') {
+                $inspect = [];
+                $inspectExitCode = 0;
+
+                if (
+                    runCommand(
+                        [
+                            'docker',
+                            'inspect',
+                            '--format',
+                            '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}',
+                            $containerId,
+                        ],
+                        null,
+                        $inspect,
+                        $inspectExitCode
+                    ) &&
+                    $inspectExitCode === 0
+                ) {
+                    $state = trim($inspect['stdout']);
+
+                    if ($state === 'running|healthy') {
+                        return;
+                    }
+
+                    if (str_starts_with($state, 'exited|')) {
+                        throw new RuntimeException(
+                            'PostgreSQL container exited before becoming healthy'
+                        );
+                    }
+                }
+            }
+        }
+
+        sleep(2);
+    } while (time() < $deadline);
+
+    throw new RuntimeException(
+        'PostgreSQL did not become healthy within ' .
+        $timeoutSeconds .
+        ' seconds'
+    );
+}
+
 function inspectContainer(string $containerId): array
 {
     $output = [];
@@ -463,9 +563,12 @@ function waitForContainerHealthy(
         $inspect = inspectContainer($containerId);
         $lastObserved = extractObservedState($inspect);
 
-        if ($lastObserved['container_state'] === 'running') {
+       if ($lastObserved['container_state'] === 'running') {
             if (checkApplicationHealth($environment)) {
-                return $lastObserved;
+                return [
+                    ...$lastObserved,
+                    'application_healthy' => true,
+                ];
             }
         }
 
@@ -716,33 +819,21 @@ try {
  * Pull the exact immutable image.
  */
 
-$output = [];
-$exitCode = 0;
-
-if (
-    !runCommand(
-        composeCommand(
-            $deploymentDir,
-            [
-                'pull',
-                'app',
-            ]
-        ),
-        $deploymentDir,
-        $output,
-        $exitCode
-    ) ||
-    $exitCode !== 0
-) {
+/*
+ * Ensure the independently managed PostgreSQL service exists and is healthy.
+ *
+ * This is required for the first deployment of a fresh environment.
+ * Existing PostgreSQL containers are left running and are not restarted
+ * as part of the application deployment.
+ */
+try {
+    ensurePostgresHealthy($deploymentDir);
+} catch (Throwable $e) {
     failResult(
         $environment,
         $requestedDigest,
-        'DOCKER_PULL_FAILED',
-        trim(
-            ($output['stderr'] ?? '') !== ''
-                ? $output['stderr']
-                : ($output['stdout'] ?? '')
-        ),
+        'DEPLOYMENT_RECONCILIATION_REQUIRED',
+        $e->getMessage(),
         $json
     );
 }
@@ -820,7 +911,7 @@ try {
 }
 
 $digestMatches =  $observed['digest'] === $requestedDigest;
-$applicationHealthy =  $observed['container_state'] === 'running';
+$applicationHealthy = $observed['application_healthy'] === true;
 
 $result = [
     'ok' => $digestMatches && $applicationHealthy,

@@ -23,6 +23,8 @@
         "RECONCILIATION_REQUIRED"
     ]);
 
+    const API_DEPLOYMENT_STATUS = "/api/deployment-status.php";
+
     const elements = {
         connection: document.querySelector("#connection"),
         refresh: document.querySelector("#refresh"),
@@ -42,7 +44,15 @@
         detailContent: document.querySelector("#detail-content"),
         resultSection: document.querySelector("#result-section"),
         resultContent: document.querySelector("#result-content"),
-        closeDetail: document.querySelector("#close-detail")
+        closeDetail: document.querySelector("#close-detail"),
+        navLinks: document.querySelectorAll(".nav-link"),
+        deploymentCards: document.querySelectorAll(".deployment-card"),
+        deploymentHistory: document.querySelector("#deployment-history"),
+        views: {
+            releases: document.querySelector("#view-releases"),
+            deployments: document.querySelector("#view-deployments"),
+            history: document.querySelector("#view-history")
+        },
     };
 
     let builds = [];
@@ -188,6 +198,145 @@
         });
     }
 
+    function renderDeployments(data) {
+        const environments = Array.isArray(data.environments)
+            ? data.environments
+            : [];
+
+        environments.forEach(environment => {
+            const card = document.querySelector(
+                `.deployment-card[data-environment="${environment.environment}"]`
+            );
+
+            if (!card) {
+                return;
+            }
+
+            const status = card.querySelector(".deployment-status");
+            const details = card.querySelector(".deployment-details");
+
+            if (!status || !details) {
+                return;
+            }
+
+            const health = environment.environment_health || "unknown";
+            const initialized = environment.initialized === true;
+            const desired = environment.desired || {};
+            const observed = environment.observed || {};
+
+            status.textContent = formatDeploymentStatus(health);
+            status.className =
+                `deployment-status ${deploymentStatusClass(health)}`;
+
+            const digest = observed.digest || desired.digest || "—";
+
+            details.innerHTML = `
+                <div>
+                    <span>Release</span>
+                    <strong>—</strong>
+                </div>
+                <div>
+                    <span>Source commit</span>
+                    <code>—</code>
+                </div>
+                <div>
+                    <span>Image digest</span>
+                    <code>${escapeHtml(initialized ? digest : "—")}</code>
+                </div>
+                <div>
+                    <span>Health</span>
+                    <strong class="${health === "healthy" ? "health-ok" : ""}">
+                        ${escapeHtml(deploymentHealthLabel(environment))}
+                    </strong>
+                </div>
+            `;
+        });
+
+        renderDeploymentHistory(environments);
+    }
+
+    function formatDeploymentStatus(health) {
+        switch (health) {
+            case "healthy":
+                return "Running";
+            case "unhealthy":
+                return "Unhealthy";
+            case "not_deployed":
+                return "Not deployed";
+            default:
+                return "Unknown";
+        }
+    }
+
+    function deploymentStatusClass(health) {
+        switch (health) {
+            case "healthy":
+                return "status-running";
+            case "not_deployed":
+                return "status-pending";
+            case "unhealthy":
+                return "status-failed";
+            default:
+                return "status-pending";
+        }
+    }
+
+    function deploymentHealthLabel(environment) {
+        if (!environment.initialized) {
+            return "Not deployed";
+        }
+
+        return environment.observed?.health || "Unknown";
+    }
+
+    function renderDeploymentHistory(environments) {
+        if (!elements.deploymentHistory) {
+            return;
+        }
+
+        const deployments = [];
+
+        environments.forEach(environment => {
+            const history = Array.isArray(environment.deployments)
+                ? environment.deployments
+                : [];
+
+            history.forEach(deployment => {
+                deployments.push({
+                    ...deployment,
+                    environment: environment.environment
+                });
+            });
+        });
+
+        if (deployments.length === 0) {
+            elements.deploymentHistory.innerHTML =
+                '<p class="muted">No deployment history available yet.</p>';
+            return;
+        }
+
+        deployments.sort((a, b) =>
+            String(b.created_at || "").localeCompare(String(a.created_at || ""))
+        );
+
+        elements.deploymentHistory.innerHTML = deployments.map(deployment => `
+            <div class="history-row">
+                <strong>${escapeHtml(deployment.environment.toUpperCase())}</strong>
+                <span>${escapeHtml(deployment.release_tag || "Unknown release")}</span>
+                <code>${escapeHtml(deployment.digest || "—")}</code>
+            </div>
+        `).join("");
+    }
+
+    function escapeHtml(value) {
+        return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+    }
+
     function renderBuilds() {
         const filtered = getFilteredBuilds();
         elements.rows.replaceChildren();
@@ -281,6 +430,7 @@
             builds = data.builds;
             renderSummary();
             renderBuilds();
+            loadDeploymentStatus();
 
             elements.lastUpdated.textContent =
                 `Updated ${new Date().toLocaleTimeString()}`;
@@ -401,6 +551,43 @@
             }
         }
     }
+
+    async function loadDeploymentStatus() {
+        try {
+            const response = await fetch(API_DEPLOYMENT_STATUS, {
+                cache: "no-store"
+            });
+
+            if (!response.ok) {
+                throw new Error(`Deployment status request failed (${response.status})`);
+            }
+
+            const data = await response.json();
+            renderDeployments(data);
+
+        } catch (error) {
+            console.error("Failed to load deployment status:", error);
+        }
+    }
+
+    function selectView(viewName) {
+        Object.entries(elements.views).forEach(([name, view]) => {
+            view.hidden = name !== viewName;
+        });
+
+        elements.navLinks.forEach(link => {
+            link.classList.toggle(
+                "active",
+                link.dataset.view === viewName
+            );
+        });
+    }
+
+    elements.navLinks.forEach(link => {
+        link.addEventListener("click", () => {
+            selectView(link.dataset.view);
+        });
+    });
 
     elements.refresh.addEventListener("click", loadBuilds);
     elements.search.addEventListener("input", renderBuilds);

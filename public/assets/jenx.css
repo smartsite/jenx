@@ -400,6 +400,96 @@ tbody tr.selected {
     font-size: 14px;
 }
 
+.deployment-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.deployment-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 20px;
+}
+
+.deployment-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.deployment-card-header h3 {
+    margin: 4px 0 0;
+}
+
+.deployment-card-header .eyebrow {
+    margin: 0;
+}
+
+.deployment-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.status-running {
+    color: var(--green);
+    background: var(--green-bg);
+}
+
+.status-pending {
+    color: var(--muted);
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+}
+
+.deployment-details {
+    display: grid;
+    gap: 14px;
+}
+
+.deployment-details > div {
+    display: grid;
+    gap: 4px;
+}
+
+.deployment-details span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.deployment-details strong,
+.deployment-details code {
+    color: var(--text);
+    font-size: 14px;
+}
+
+.deployment-details code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, "Liberation Mono", monospace;
+    word-break: break-all;
+}
+
+.health-ok {
+    color: var(--green) !important;
+}
+
+@media (max-width: 900px) {
+    .deployment-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 .footer {
     display: flex;
     justify-content: space-between;
@@ -407,6 +497,32 @@ tbody tr.selected {
     padding: 8px 0;
     color: var(--muted);
     font-size: 12px;
+}
+
+.main-nav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.nav-link {
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 7px;
+    color: var(--muted);
+    background: transparent;
+    font-weight: 650;
+}
+
+.nav-link:hover {
+    color: var(--text);
+    background: var(--surface-alt);
+}
+
+.nav-link.active {
+    color: var(--accent);
+    background: var(--accent-soft);
 }
 
 [hidden] {
@@ -459,6 +575,16 @@ tbody tr.selected {
 @media (max-width: 480px) {
     .header-right {
         gap: 6px;
+    }
+
+    .main-nav {
+        order: 3;
+        width: 100%;
+        margin-left: 0;
+    }
+
+    .topbar {
+        flex-wrap: wrap;
     }
 
     .connection {
