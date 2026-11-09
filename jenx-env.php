@@ -15,6 +15,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require_once __DIR__ . '/jenx-env-state.php';
+const JENX_DEPLOY_ADAPTER = __DIR__ . '/jenx-deploy.php';
 
 const JENX_ENV_EXIT_OK = 0;
 const JENX_ENV_EXIT_ARGUMENT = 2;
@@ -126,6 +127,140 @@ function jenxEnvCliReadStateView(string $environment): array
     return $state + ['initialized' => true, 'environment_health' => jenxEnvIsHealthy($state) ? 'healthy' : ((($state['observed']['health'] ?? 'unknown') === 'unhealthy') ? 'unhealthy' : 'unknown')];
 }
 
+function jenxEnvRecordSuccessfulDeployment(
+    string $environment,
+    array $operation,
+    array $adapterResult
+): array {
+    $state = jenxEnvReadState($environment);
+
+    if ($state === null) {
+        $state = jenxEnvDefaultState($environment);
+    }
+
+    $previousCurrentDeploymentId = $state['current_deployment_id'] ?? null;
+
+    $observed = $adapterResult['observed'] ?? [];
+    $verification = $adapterResult['verification'] ?? [];
+
+    $deployment = [
+        'deployment_id' => $operation['operation_id'],
+        'digest' => jenxEnvValidateDigest(
+            (string) $operation['requested_digest']
+        ),
+        'verified_healthy' =>
+            ($verification['image_digest_matches'] ?? false) === true
+            && ($verification['application_healthy'] ?? false) === true,
+    ];
+
+    array_unshift($state['deployments'], $deployment);
+
+    $state['desired'] = [
+        'digest' => $deployment['digest'],
+    ];
+
+    $state['observed'] = [
+        'image' => $observed['image'] ?? null,
+        'digest' => $observed['digest'] ?? null,
+        'container_state' => $observed['container_state'] ?? 'unknown',
+        'health' =>
+            ($verification['application_healthy'] ?? false) === true
+                ? 'healthy'
+                : 'unknown',
+        'observed_at' => jenxEnvTimestamp(),
+    ];
+
+    $state['previous_healthy_deployment_id'] =
+        $previousCurrentDeploymentId;
+
+    $state['current_deployment_id'] =
+        $operation['operation_id'];
+
+    $state['active_operation_id'] = null;
+    $state['last_successful_operation_id'] =
+        $operation['operation_id'];
+
+    jenxEnvWriteState($environment, $state);
+
+    return $state;
+}
+
+function jenxEnvRunDeploymentAdapter(
+    string $environment,
+    string $digest
+): array {
+    if (!is_file(JENX_DEPLOY_ADAPTER) || !is_readable(JENX_DEPLOY_ADAPTER)) {
+        throw new RuntimeException('Deployment adapter is missing or unreadable.');
+    }
+
+    $command = [
+        PHP_BINARY,
+        JENX_DEPLOY_ADAPTER,
+        'deploy',
+        $environment,
+        $digest,
+        '--json',
+    ];
+
+    $escaped = array_map(
+        static fn(string $arg): string => escapeshellarg($arg),
+        $command
+    );
+
+    $process = proc_open(
+        implode(' ', $escaped),
+        [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ],
+        $pipes
+    );
+
+    if (!is_resource($process)) {
+        throw new RuntimeException('Unable to start deployment adapter.');
+    }
+
+    fclose($pipes[0]);
+
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    $exitCode = proc_close($process);
+
+    if ($stdout === false || trim($stdout) === '') {
+        throw new RuntimeException(
+            'Deployment adapter returned no JSON output: ' .
+            trim((string) $stderr)
+        );
+    }
+
+    try {
+        $result = json_decode(
+            $stdout,
+            true,
+            512,
+            JSON_THROW_ON_ERROR
+        );
+    } catch (JsonException $exception) {
+        throw new RuntimeException(
+            'Deployment adapter returned invalid JSON: ' .
+            $exception->getMessage()
+        );
+    }
+
+    if (!is_array($result)) {
+        throw new RuntimeException('Deployment adapter returned an invalid result.');
+    }
+
+    $result['_exit_code'] = $exitCode;
+
+    return $result;
+}
+
 $args = $argv;
 array_shift($args);
 $json = false;
@@ -183,34 +318,351 @@ try {
             }
             jenxEnvCliEmit(['schema_version' => 1, 'ok' => true, 'operation' => $operation], $json);
 
-        case 'deploy':
+       case 'deploy':
             if (count($positionals) !== 3) {
                 throw new InvalidArgumentException('deploy requires an environment and image digest.');
             }
-            $environment = jenxEnvValidateName($positionals[1]);
-            if ($environment === 'prod' && !$confirmProd) {
-                jenxEnvCliError('PROD_CONFIRMATION_REQUIRED', 'Mutating PROD requires --confirm-prod.', $json, JENX_ENV_EXIT_ARGUMENT);
-            }
-            $eligibility = jenxEnvEligibility($environment, $positionals[2]);
-            if (!$eligibility['actions']['deploy']['available']) {
-                jenxEnvCliError('ACTION_NOT_ELIGIBLE', $eligibility['actions']['deploy']['reason'] ?? 'Deploy is unavailable.', $json, JENX_ENV_EXIT_INELIGIBLE);
-            }
-            jenxEnvCliError('DEPLOYMENT_ADAPTER_UNAVAILABLE', 'Preflight passed, but no Docker/Compose deployment adapter is installed. No state was changed.', $json, JENX_ENV_EXIT_DEPENDENCY);
 
-        case 'promote':
-            if (count($positionals) !== 3) {
-                throw new InvalidArgumentException('promote requires source and target environments.');
+            $environment = jenxEnvValidateName($positionals[1]);
+            $requestedDigest = jenxEnvValidateDigest($positionals[2]);
+
+            if ($environment === 'prod' && !$confirmProd) {
+                jenxEnvCliError(
+                    'PROD_CONFIRMATION_REQUIRED',
+                    'Mutating PROD requires --confirm-prod.',
+                    $json,
+                    JENX_ENV_EXIT_ARGUMENT
+                );
             }
-            $source = jenxEnvValidateName($positionals[1]);
-            $target = jenxEnvValidateName($positionals[2]);
-            if ($target === 'prod' && !$confirmProd) {
-                jenxEnvCliError('PROD_CONFIRMATION_REQUIRED', 'Promotion to PROD requires --confirm-prod.', $json, JENX_ENV_EXIT_ARGUMENT);
+
+            $eligibility = jenxEnvEligibility($environment, $requestedDigest);
+
+            if (!$eligibility['actions']['deploy']['available']) {
+                jenxEnvCliError(
+                    'ACTION_NOT_ELIGIBLE',
+                    $eligibility['actions']['deploy']['reason'] ?? 'Deploy is unavailable.',
+                    $json,
+                    JENX_ENV_EXIT_INELIGIBLE
+                );
             }
-            $eligibility = jenxEnvEligibility($target, null, $source);
-            if (!$eligibility['actions']['promote']['available']) {
-                jenxEnvCliError('ACTION_NOT_ELIGIBLE', $eligibility['actions']['promote']['reason'] ?? 'Promotion is unavailable.', $json, JENX_ENV_EXIT_INELIGIBLE);
+
+            $state = jenxEnvReadState($environment);
+            $previousDigest = $state['observed']['digest'] ?? null;
+
+            $operation = jenxEnvCreateOperation(
+                'deploy',
+                $environment,
+                null,
+                $requestedDigest,
+                $previousDigest
+            );
+
+            $operation = jenxEnvTransitionOperation(
+                $operation,
+                'APPLYING'
+            );
+
+            try {
+                $adapterResult = jenxEnvRunDeploymentAdapter(
+                    $environment,
+                    $requestedDigest
+                );
+
+                $verification = $adapterResult['verification'] ?? [
+                    'image_digest_matches' => false,
+                    'application_healthy' => false,
+                ];
+
+                if (($adapterResult['ok'] ?? false) !== true) {
+                    $operation = jenxEnvTransitionOperation(
+                        $operation,
+                        'VERIFYING',
+                        [
+                            'verification' => [
+                                'image_digest_matches' => (bool) ($verification['image_digest_matches'] ?? false),
+                                'application_healthy' => (bool) ($verification['application_healthy'] ?? false),
+                            ],
+                        ]
+                    );
+
+                    $operation = jenxEnvTransitionOperation(
+                        $operation,
+                        'FAILED',
+                        [
+                            'error_code' => (string) ($adapterResult['error_code'] ?? 'DEPLOYMENT_FAILED'),
+                            'error_message' => (string) ($adapterResult['error_message'] ?? 'Deployment adapter reported failure.'),
+                        ]
+                    );
+
+                    jenxEnvCliEmit(
+                        [
+                            'schema_version' => 1,
+                            'ok' => false,
+                            'operation' => $operation,
+                            'adapter' => $adapterResult,
+                        ],
+                        $json,
+                        JENX_ENV_EXIT_FAILED
+                    );
+                }
+
+                $operation = jenxEnvTransitionOperation(
+                    $operation,
+                    'VERIFYING',
+                    [
+                        'verification' => [
+                            'image_digest_matches' => (bool) ($verification['image_digest_matches'] ?? false),
+                            'application_healthy' => (bool) ($verification['application_healthy'] ?? false),
+                        ],
+                    ]
+                );
+
+                $operation = jenxEnvTransitionOperation(
+                    $operation,
+                    'SUCCEEDED'
+                );
+
+                jenxEnvRecordSuccessfulDeployment(
+                    $environment,
+                    $operation,
+                    $adapterResult
+                );
+
+                jenxEnvCliEmit(
+                    [
+                        'schema_version' => 1,
+                        'ok' => true,
+                        'operation' => $operation,
+                        'adapter' => $adapterResult,
+                    ],
+                    $json,
+                    JENX_ENV_EXIT_OK
+                );
+
+            } catch (Throwable $exception) {
+                try {
+                    $operation = jenxEnvTransitionOperation(
+                        $operation,
+                        'RECONCILIATION_REQUIRED',
+                        [
+                            'error_code' => 'DEPLOYMENT_OUTCOME_UNRESOLVED',
+                            'error_message' => $exception->getMessage(),
+                        ]
+                    );
+                } catch (Throwable $transitionException) {
+                    error_log(
+                        'Jen-X deployment operation could not be marked unresolved: ' .
+                        $transitionException->getMessage()
+                    );
+                }
+
+                jenxEnvCliEmit(
+                    [
+                        'schema_version' => 1,
+                        'ok' => false,
+                        'operation' => $operation,
+                        'error' => [
+                            'code' => 'DEPLOYMENT_OUTCOME_UNRESOLVED',
+                            'message' => $exception->getMessage(),
+                        ],
+                    ],
+                    $json,
+                    JENX_ENV_EXIT_UNRESOLVED
+                );
             }
-            jenxEnvCliError('DEPLOYMENT_ADAPTER_UNAVAILABLE', 'Promotion preflight passed, but no Docker/Compose deployment adapter is installed. No state was changed.', $json, JENX_ENV_EXIT_DEPENDENCY);
+               case 'promote':
+                    if (count($positionals) !== 3) {
+                        throw new InvalidArgumentException('promote requires source and target environments.');
+                    }
+
+                    $source = jenxEnvValidateName($positionals[1]);
+                    $target = jenxEnvValidateName($positionals[2]);
+
+                    if ($target === 'prod' && !$confirmProd) {
+                        jenxEnvCliError(
+                            'PROD_CONFIRMATION_REQUIRED',
+                            'Promotion to PROD requires --confirm-prod.',
+                            $json,
+                            JENX_ENV_EXIT_ARGUMENT
+                        );
+                    }
+
+                    $eligibility = jenxEnvEligibility($target, null, $source);
+
+                    if (!$eligibility['actions']['promote']['available']) {
+                        jenxEnvCliError(
+                            'ACTION_NOT_ELIGIBLE',
+                            $eligibility['actions']['promote']['reason'] ?? 'Promotion is unavailable.',
+                            $json,
+                            JENX_ENV_EXIT_INELIGIBLE
+                        );
+                    }
+
+                    /*
+                    * Promotion uses the exact digest of the source environment's
+                    * current verified healthy deployment. No rebuild or new image
+                    * lookup is performed.
+                    */
+                    $sourceState = jenxEnvReadState($source);
+                    if ($sourceState === null) {
+                        jenxEnvCliError(
+                            'SOURCE_STATE_UNAVAILABLE',
+                            'Source environment state is unavailable.',
+                            $json,
+                            JENX_ENV_EXIT_DEPENDENCY
+                        );
+                    }
+
+                    $sourceDeployment = jenxEnvFindDeployment(
+                        $sourceState,
+                        $sourceState['current_deployment_id'] ?? null
+                    );
+
+                    if ($sourceDeployment === null
+                        || ($sourceDeployment['verified_healthy'] ?? false) !== true
+                    ) {
+                        jenxEnvCliError(
+                            'SOURCE_DEPLOYMENT_UNAVAILABLE',
+                            'Source environment has no current verified healthy deployment.',
+                            $json,
+                            JENX_ENV_EXIT_DEPENDENCY
+                        );
+                    }
+
+                    $requestedDigest = jenxEnvValidateDigest(
+                        (string) ($sourceDeployment['digest'] ?? '')
+                    );
+
+                    $targetState = jenxEnvReadState($target);
+                    $previousDigest = $targetState['observed']['digest'] ?? null;
+
+                    $operation = jenxEnvCreateOperation(
+                        'promote',
+                        $target,
+                        $source,
+                        $requestedDigest,
+                        $previousDigest
+                    );
+
+                    $operation = jenxEnvTransitionOperation(
+                        $operation,
+                        'APPLYING'
+                    );
+
+                    try {
+                        $adapterResult = jenxEnvRunDeploymentAdapter(
+                            $target,
+                            $requestedDigest
+                        );
+
+                        $verification = $adapterResult['verification'] ?? [
+                            'image_digest_matches' => false,
+                            'application_healthy' => false,
+                        ];
+
+                        if (($adapterResult['ok'] ?? false) !== true) {
+                            $operation = jenxEnvTransitionOperation(
+                                $operation,
+                                'VERIFYING',
+                                [
+                                    'verification' => [
+                                        'image_digest_matches' =>
+                                            (bool) ($verification['image_digest_matches'] ?? false),
+                                        'application_healthy' =>
+                                            (bool) ($verification['application_healthy'] ?? false),
+                                    ],
+                                ]
+                            );
+
+                            $operation = jenxEnvTransitionOperation(
+                                $operation,
+                                'FAILED',
+                                [
+                                    'error_code' =>
+                                        (string) ($adapterResult['error_code'] ?? 'DEPLOYMENT_FAILED'),
+                                    'error_message' =>
+                                        (string) ($adapterResult['error_message'] ?? 'Promotion adapter reported failure.'),
+                                ]
+                            );
+
+                            jenxEnvCliEmit(
+                                [
+                                    'schema_version' => 1,
+                                    'ok' => false,
+                                    'operation' => $operation,
+                                    'adapter' => $adapterResult,
+                                ],
+                                $json,
+                                JENX_ENV_EXIT_FAILED
+                            );
+                        }
+
+                        $operation = jenxEnvTransitionOperation(
+                            $operation,
+                            'VERIFYING',
+                            [
+                                'verification' => [
+                                    'image_digest_matches' =>
+                                        (bool) ($verification['image_digest_matches'] ?? false),
+                                    'application_healthy' =>
+                                        (bool) ($verification['application_healthy'] ?? false),
+                                ],
+                            ]
+                        );
+
+                        $operation = jenxEnvTransitionOperation(
+                            $operation,
+                            'SUCCEEDED'
+                        );
+
+                        jenxEnvRecordSuccessfulDeployment(
+                            $target,
+                            $operation,
+                            $adapterResult
+                        );
+
+                        jenxEnvCliEmit(
+                            [
+                                'schema_version' => 1,
+                                'ok' => true,
+                                'operation' => $operation,
+                                'adapter' => $adapterResult,
+                            ],
+                            $json,
+                            JENX_ENV_EXIT_OK
+                        );
+
+                    } catch (Throwable $exception) {
+                        try {
+                            $operation = jenxEnvTransitionOperation(
+                                $operation,
+                                'RECONCILIATION_REQUIRED',
+                                [
+                                    'error_code' => 'DEPLOYMENT_OUTCOME_UNRESOLVED',
+                                    'error_message' => $exception->getMessage(),
+                                ]
+                            );
+                        } catch (Throwable $transitionException) {
+                            error_log(
+                                'Jen-X promotion operation could not be marked unresolved: ' .
+                                $transitionException->getMessage()
+                            );
+                        }
+
+                        jenxEnvCliEmit(
+                            [
+                                'schema_version' => 1,
+                                'ok' => false,
+                                'operation' => $operation,
+                                'error' => [
+                                    'code' => 'DEPLOYMENT_OUTCOME_UNRESOLVED',
+                                    'message' => $exception->getMessage(),
+                                ],
+                            ],
+                            $json,
+                            JENX_ENV_EXIT_UNRESOLVED
+                        );
+                    }
 
         case 'rollback':
             if (count($positionals) !== 2) {

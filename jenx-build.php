@@ -141,9 +141,6 @@ function jenxBuildGenerateRequestId(): string
     );
 }
 
-
-/* ---------- Input validation ---------- */
-
 /* ---------- Input validation ---------- */
 
 $dryRun = ($argc === 4 && $argv[1] === '--dry-run');
@@ -152,11 +149,15 @@ $testOnly = ($argc === 4 && $argv[1] === '--test-only');
 if ($dryRun || $testOnly) {
     $releaseTag = $argv[2];
     $sourceCommit = strtolower($argv[3]);
+} elseif ($argc === 3) {
+    // Normal production release.
+    $releaseTag = $argv[1];
+    $sourceCommit = strtolower($argv[2]);
 } else {
     jenxBuildFail(
-        'Dry-run or test-only mode required: '
-        . 'use --dry-run <release-tag> <full-source-commit-sha> '
-        . 'or --test-only <release-tag> <full-source-commit-sha>'
+        'Usage: '
+        . 'jenx-build.php <release-tag> <full-source-commit-sha> '
+        . '[or --dry-run|--test-only]'
     );
 }
 

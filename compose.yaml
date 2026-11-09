@@ -1,0 +1,22 @@
+services:
+  jenx:
+    build:
+      context: .
+      dockerfile: jenx.Dockerfile
+
+    container_name: jenx
+
+    working_dir: /var/www/jenx
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/foundd:/opt/foundd
+      - ./state:/var/www/jenx/state
+      - /etc/jenx/docker-config.json:/root/.docker/config.json:ro
+
+    environment:
+      JENX_ENV_STATE_DIRECTORY: /var/www/jenx/state/environments
+      JENX_BUILD_STATE_DIRECTORY: /var/www/jenx/state/builds
+      JENX_FOUNDD_BASE_DIR: /opt/foundd
+
+    init: true
