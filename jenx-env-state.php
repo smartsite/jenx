@@ -427,14 +427,32 @@ function jenxEnvEligibility(string $environment, ?string $candidateDigest = null
     }
 
     $rollbackCandidate = null;
+
     if ($state !== null) {
+        $currentDeployment = jenxEnvFindDeployment(
+            $state,
+            $state['current_deployment_id'] ?? null
+        );
+
+        $currentDigest = $currentDeployment['digest'] ?? null;
+
         foreach ($state['deployments'] as $deployment) {
-            if (($deployment['deployment_id'] ?? null) !== ($state['current_deployment_id'] ?? null)
-                && ($deployment['verified_healthy'] ?? false) === true
-            ) {
-                $rollbackCandidate = $deployment;
-                break;
+            if (($deployment['deployment_id'] ?? null) === ($state['current_deployment_id'] ?? null)) {
+                continue;
             }
+
+            if (($deployment['verified_healthy'] ?? false) !== true) {
+                continue;
+            }
+
+            if ($currentDigest !== null
+                && ($deployment['digest'] ?? null) === $currentDigest
+            ) {
+                continue;
+            }
+
+            $rollbackCandidate = $deployment;
+            break;
         }
     }
     $rollbackReason = null;

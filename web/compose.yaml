@@ -1,0 +1,15 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: jenx-web
+
+    ports:
+      - "8080:80"
+
+    volumes:
+      - /run/jenx:/run/jenx
+
+    restart: unless-stopped

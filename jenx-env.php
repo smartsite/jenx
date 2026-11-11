@@ -124,7 +124,44 @@ function jenxEnvCliReadStateView(string $environment): array
             'updated_at' => null,
         ];
     }
-    return $state + ['initialized' => true, 'environment_health' => jenxEnvIsHealthy($state) ? 'healthy' : ((($state['observed']['health'] ?? 'unknown') === 'unhealthy') ? 'unhealthy' : 'unknown')];
+
+    $deployments = $state['deployments'] ?? [];
+
+    foreach ($deployments as &$deployment) {
+        if (
+            isset($deployment['release_tag'], $deployment['source_commit'], $deployment['image'])
+        ) {
+            continue;
+        }
+
+        $digest = $deployment['digest'] ?? null;
+
+        if (!is_string($digest)) {
+            continue;
+        }
+
+        $build = jenxEnvFindValidatedBuild($digest);
+
+        if ($build === null) {
+            continue;
+        }
+
+        $deployment['image'] = $build['image'];
+        $deployment['source_commit'] = $build['source_commit'];
+        $deployment['release_tag'] = $build['release_tag'];
+    }
+
+    unset($deployment);
+
+    return $state + [
+        'initialized' => true,
+        'environment_health' => jenxEnvIsHealthy($state)
+            ? 'healthy'
+            : ((($state['observed']['health'] ?? 'unknown') === 'unhealthy')
+                ? 'unhealthy'
+                : 'unknown'),
+        'deployments' => $deployments,
+    ];
 }
 
 function jenxEnvRecordSuccessfulDeployment(
@@ -143,14 +180,23 @@ function jenxEnvRecordSuccessfulDeployment(
     $observed = $adapterResult['observed'] ?? [];
     $verification = $adapterResult['verification'] ?? [];
 
+     $digest = jenxEnvValidateDigest(
+        (string) $operation['requested_digest']
+    );
+
+    $build = jenxEnvFindValidatedBuild($digest);
+
     $deployment = [
         'deployment_id' => $operation['operation_id'],
-        'digest' => jenxEnvValidateDigest(
-            (string) $operation['requested_digest']
-        ),
+        'operation_id' => $operation['operation_id'],
+        'digest' => $digest,
+        'image' => $build['image'] ?? null,
+        'source_commit' => $build['source_commit'] ?? null,
+        'release_tag' => $build['release_tag'] ?? null,
         'verified_healthy' =>
             ($verification['image_digest_matches'] ?? false) === true
             && ($verification['application_healthy'] ?? false) === true,
+        'deployed_at' => jenxEnvTimestamp(),
     ];
 
     array_unshift($state['deployments'], $deployment);
@@ -668,15 +714,189 @@ try {
             if (count($positionals) !== 2) {
                 throw new InvalidArgumentException('rollback requires an environment.');
             }
+
             $environment = jenxEnvValidateName($positionals[1]);
+
             if ($environment === 'prod' && !$confirmProd) {
-                jenxEnvCliError('PROD_CONFIRMATION_REQUIRED', 'Rollback of PROD requires --confirm-prod.', $json, JENX_ENV_EXIT_ARGUMENT);
+                jenxEnvCliError(
+                    'PROD_CONFIRMATION_REQUIRED',
+                    'Rollback of PROD requires --confirm-prod.',
+                    $json,
+                    JENX_ENV_EXIT_ARGUMENT
+                );
             }
+
             $eligibility = jenxEnvEligibility($environment);
+
             if (!$eligibility['actions']['rollback']['available']) {
-                jenxEnvCliError('ACTION_NOT_ELIGIBLE', $eligibility['actions']['rollback']['reason'] ?? 'Rollback is unavailable.', $json, JENX_ENV_EXIT_INELIGIBLE);
+                jenxEnvCliError(
+                    'ACTION_NOT_ELIGIBLE',
+                    $eligibility['actions']['rollback']['reason'] ?? 'Rollback is unavailable.',
+                    $json,
+                    JENX_ENV_EXIT_INELIGIBLE
+                );
             }
-            jenxEnvCliError('DEPLOYMENT_ADAPTER_UNAVAILABLE', 'Rollback preflight passed, but no Docker/Compose deployment adapter is installed. No state was changed.', $json, JENX_ENV_EXIT_DEPENDENCY);
+
+            $state = jenxEnvReadState($environment);
+
+            if ($state === null) {
+                jenxEnvCliError(
+                    'ENVIRONMENT_STATE_UNAVAILABLE',
+                    'Environment state is unavailable.',
+                    $json,
+                    JENX_ENV_EXIT_DEPENDENCY
+                );
+            }
+
+            $previousDeployment = jenxEnvFindDeployment(
+                $state,
+                $state['previous_healthy_deployment_id'] ?? null
+            );
+
+            if ($previousDeployment === null
+                || ($previousDeployment['verified_healthy'] ?? false) !== true
+            ) {
+                jenxEnvCliError(
+                    'ROLLBACK_DEPLOYMENT_UNAVAILABLE',
+                    'No previous verified healthy deployment is available for rollback.',
+                    $json,
+                    JENX_ENV_EXIT_DEPENDENCY
+                );
+            }
+
+            $requestedDigest = jenxEnvValidateDigest(
+                (string) ($previousDeployment['digest'] ?? '')
+            );
+
+            $previousDigest = $state['observed']['digest'] ?? null;
+
+            $operation = jenxEnvCreateOperation(
+                'rollback',
+                $environment,
+                null,
+                $requestedDigest,
+                $previousDigest
+            );
+
+            $operation = jenxEnvTransitionOperation(
+                $operation,
+                'APPLYING'
+            );
+
+            try {
+                $adapterResult = jenxEnvRunDeploymentAdapter(
+                    $environment,
+                    $requestedDigest
+                );
+
+                $verification = $adapterResult['verification'] ?? [
+                    'image_digest_matches' => false,
+                    'application_healthy' => false,
+                ];
+
+                if (($adapterResult['ok'] ?? false) !== true) {
+                    $operation = jenxEnvTransitionOperation(
+                        $operation,
+                        'VERIFYING',
+                        [
+                            'verification' => [
+                                'image_digest_matches' =>
+                                    (bool) ($verification['image_digest_matches'] ?? false),
+                                'application_healthy' =>
+                                    (bool) ($verification['application_healthy'] ?? false),
+                            ],
+                        ]
+                    );
+
+                    $operation = jenxEnvTransitionOperation(
+                        $operation,
+                        'FAILED',
+                        [
+                            'error_code' =>
+                                (string) ($adapterResult['error_code'] ?? 'ROLLBACK_FAILED'),
+                            'error_message' =>
+                                (string) ($adapterResult['error_message'] ?? 'Rollback adapter reported failure.'),
+                        ]
+                    );
+
+                    jenxEnvCliEmit(
+                        [
+                            'schema_version' => 1,
+                            'ok' => false,
+                            'operation' => $operation,
+                            'adapter' => $adapterResult,
+                        ],
+                        $json,
+                        JENX_ENV_EXIT_FAILED
+                    );
+                }
+
+                $operation = jenxEnvTransitionOperation(
+                    $operation,
+                    'VERIFYING',
+                    [
+                        'verification' => [
+                            'image_digest_matches' =>
+                                (bool) ($verification['image_digest_matches'] ?? false),
+                            'application_healthy' =>
+                                (bool) ($verification['application_healthy'] ?? false),
+                        ],
+                    ]
+                );
+
+                $operation = jenxEnvTransitionOperation(
+                    $operation,
+                    'SUCCEEDED'
+                );
+
+                jenxEnvRecordSuccessfulDeployment(
+                    $environment,
+                    $operation,
+                    $adapterResult
+                );
+
+                jenxEnvCliEmit(
+                    [
+                        'schema_version' => 1,
+                        'ok' => true,
+                        'operation' => $operation,
+                        'adapter' => $adapterResult,
+                    ],
+                    $json,
+                    JENX_ENV_EXIT_OK
+                );
+
+            } catch (Throwable $exception) {
+                try {
+                    $operation = jenxEnvTransitionOperation(
+                        $operation,
+                        'RECONCILIATION_REQUIRED',
+                        [
+                            'error_code' => 'DEPLOYMENT_OUTCOME_UNRESOLVED',
+                            'error_message' => $exception->getMessage(),
+                        ]
+                    );
+                } catch (Throwable $transitionException) {
+                    error_log(
+                        'Jen-X rollback operation could not be marked unresolved: ' .
+                        $transitionException->getMessage()
+                    );
+                }
+
+                jenxEnvCliEmit(
+                    [
+                        'schema_version' => 1,
+                        'ok' => false,
+                        'operation' => $operation,
+                        'error' => [
+                            'code' => 'DEPLOYMENT_OUTCOME_UNRESOLVED',
+                            'message' => $exception->getMessage(),
+                        ],
+                    ],
+                    $json,
+                    JENX_ENV_EXIT_UNRESOLVED
+                );
+            }
     }
 } catch (InvalidArgumentException $exception) {
     jenxEnvCliError('INVALID_ARGUMENT', $exception->getMessage(), $json, JENX_ENV_EXIT_ARGUMENT);

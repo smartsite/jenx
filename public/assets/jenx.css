@@ -612,3 +612,22 @@ tbody tr.selected {
     }
 }
 
+
+/* Deployment action controls */
+.deployment-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.deployment-action {
+    cursor: pointer;
+}
+
+.deployment-action:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}

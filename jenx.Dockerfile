@@ -16,6 +16,8 @@ RUN apt-get update \
 
 WORKDIR /var/www/jenx
 COPY . /var/www/jenx/
+RUN mkdir -p /var/www/controller-api \
+ && cp /var/www/jenx/controller-api/index.php /var/www/controller-api/index.php
 
 RUN mkdir -p /var/www/jenx/state \
  && chmod 755 /var/www/jenx/state

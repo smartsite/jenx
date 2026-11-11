@@ -4,68 +4,120 @@ declare(strict_types=1);
 
 header('Content-Type: application/json; charset=utf-8');
 
-require_once __DIR__ . '/../../jenx-env-state.php';
-
-function deploymentStatusReadStateView(string $environment): array
-{
-    $environment = jenxEnvValidateName($environment);
-    $state = jenxEnvReadState($environment);
-
-    if ($state === null) {
-        return [
-            'schema_version' => 1,
-            'environment' => $environment,
-            'initialized' => false,
-            'environment_health' => 'not_deployed',
-            'desired' => null,
-            'observed' => [
-                'image' => null,
-                'digest' => null,
-                'container_state' => 'unknown',
-                'health' => 'unknown',
-                'observed_at' => null,
-            ],
-            'current_deployment_id' => null,
-            'previous_healthy_deployment_id' => null,
-            'active_operation_id' => null,
-            'last_successful_operation_id' => null,
-            'deployments' => [],
-            'updated_at' => null,
-        ];
-    }
-
-    return $state + [
-        'initialized' => true,
-        'environment_health' => jenxEnvIsHealthy($state)
-            ? 'healthy'
-            : ((($state['observed']['health'] ?? 'unknown') === 'unhealthy')
-                ? 'unhealthy'
-                : 'unknown'),
-    ];
-}
-
-try {
-    $environments = [];
-
-    foreach (JENX_ENVIRONMENTS as $environment) {
-        $environments[] = deploymentStatusReadStateView($environment);
-    }
-
-    echo json_encode([
-        'schema_version' => 1,
-        'ok' => true,
-        'environments' => $environments,
-    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-
-} catch (Throwable $e) {
-    http_response_code(500);
+function deploymentStatusFail(
+    string $code,
+    string $message,
+    int $status = 500
+): never {
+    http_response_code($status);
 
     echo json_encode([
         'schema_version' => 1,
         'ok' => false,
         'error' => [
-            'code' => 'DEPLOYMENT_STATUS_FAILED',
-            'message' => $e->getMessage(),
+            'code' => $code,
+            'message' => $message,
         ],
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+    exit;
+}
+
+function deploymentStatusReadBridge(): array
+{
+    $socket = '/run/jenx/web.sock';
+
+    $connection = @stream_socket_client(
+        'unix://' . $socket,
+        $errno,
+        $errstr,
+        10
+    );
+
+    if ($connection === false) {
+        deploymentStatusFail(
+            'BRIDGE_CONNECTION_FAILED',
+            'Unable to connect to the Jen-X deployment gateway.',
+            502
+        );
+    }
+
+    $payload = json_encode([
+        'command' => ['status'],
+    ], JSON_THROW_ON_ERROR);
+
+    fwrite($connection, $payload);
+
+    $response = stream_get_contents($connection);
+    fclose($connection);
+
+    if ($response === false || trim($response) === '') {
+        deploymentStatusFail(
+            'BRIDGE_EMPTY_RESPONSE',
+            'The Jen-X deployment gateway returned no response.',
+            502
+        );
+    }
+
+    $decoded = json_decode($response, true);
+
+    if (!is_array($decoded)) {
+        deploymentStatusFail(
+            'BRIDGE_INVALID_RESPONSE',
+            'The Jen-X deployment gateway returned invalid JSON.',
+            502
+        );
+    }
+
+    if (($decoded['ok'] ?? false) !== true) {
+        deploymentStatusFail(
+            'BRIDGE_FAILED',
+            isset($decoded['error'])
+                ? (string) $decoded['error']
+                : 'The Jen-X deployment gateway failed.',
+            500
+        );
+    }
+
+    $stdout = $decoded['stdout'] ?? '';
+
+    if ($stdout === '') {
+        deploymentStatusFail(
+            'BRIDGE_EMPTY_RESPONSE',
+            'The Jen-X deployment bridge returned no deployment status.',
+            502
+        );
+    }
+
+    $result = json_decode($stdout, true);
+
+    if (!is_array($result)) {
+        deploymentStatusFail(
+            'BRIDGE_INVALID_RESPONSE',
+            'The Jen-X deployment bridge returned invalid deployment JSON.',
+            502
+        );
+    }
+
+    return $result;
+}
+
+try {
+    $result = deploymentStatusReadBridge();
+
+    http_response_code(200);
+
+    echo json_encode(
+        $result,
+        JSON_PRETTY_PRINT |
+        JSON_UNESCAPED_SLASHES |
+        JSON_THROW_ON_ERROR
+    );
+
+} catch (Throwable $e) {
+    deploymentStatusFail(
+        'DEPLOYMENT_STATUS_FAILED',
+        $e->getMessage(),
+        500
+    );
 }

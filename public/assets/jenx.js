@@ -24,6 +24,7 @@
     ]);
 
     const API_DEPLOYMENT_STATUS = "/api/deployment-status.php";
+    const API_DEPLOYMENT_ACTION = "/api/deployment-action.php";
 
     const elements = {
         connection: document.querySelector("#connection"),
@@ -57,6 +58,7 @@
 
     let builds = [];
     let selectedRequestId = null;
+    let selectedBuild = null;
     let loading = false;
 
     function formatDate(value) {
@@ -198,6 +200,230 @@
         });
     }
 
+    function getSelectedVerifiedDigest() {
+        if (
+            selectedBuild
+            && selectedBuild.status === "SUCCEEDED"
+            && selectedBuild.result
+            && typeof selectedBuild.result.digest === "string"
+            && /^sha256:[a-f0-9]{64}$/.test(selectedBuild.result.digest)
+        ) {
+            return selectedBuild.result.digest;
+        }
+
+        return null;
+    }
+
+    function deploymentActionConfirm(message) {
+        return window.confirm(message);
+    }
+
+    async function runDeploymentAction(payload) {
+        const response = await fetch(API_DEPLOYMENT_ACTION, {
+            method: "POST",
+            cache: "no-store",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify(payload)
+        });
+
+        let data;
+
+        try {
+            data = await response.json();
+        } catch (error) {
+            throw new Error(
+                `Deployment action returned HTTP ${response.status} without valid JSON.`
+            );
+        }
+
+        if (!response.ok || data.ok !== true) {
+            const message =
+                data?.error?.message
+                || `Deployment action failed (HTTP ${response.status}).`;
+
+            throw new Error(message);
+        }
+
+        return data;
+    }
+
+    async function handleDeploymentAction(payload, confirmationMessage) {
+        if (
+            confirmationMessage
+            && !deploymentActionConfirm(confirmationMessage)
+        ) {
+            return;
+        }
+
+        clearError();
+
+        elements.deploymentCards.forEach(card => {
+            card.querySelectorAll(".deployment-action").forEach(button => {
+                button.disabled = true;
+            });
+        });
+
+        setConnection("Deployment in progress…");
+
+        try {
+            const data = await runDeploymentAction(payload);
+
+            setConnection("Connected");
+
+            const operation = data.operation || {};
+            const operationId = operation.operation_id || "unknown";
+
+            window.alert(
+                `${String(payload.action).toUpperCase()} succeeded.\n\n` +
+                `Environment: ${operation.target_environment || "—"}\n` +
+                `Operation: ${operationId}`
+            );
+
+            await loadDeploymentStatus();
+        } catch (error) {
+            setConnection("Connected");
+            showError(error.message || "Deployment action failed.");
+            window.alert(
+                `Deployment action failed.\n\n${error.message || "Unknown error."}`
+            );
+        } finally {
+            elements.deploymentCards.forEach(card => {
+                card.querySelectorAll(".deployment-action").forEach(button => {
+                    button.disabled = false;
+                });
+            });
+        }
+    }
+
+    function createDeploymentActionButton(label, payload, confirmationMessage, disabled = false) {
+        const button = createElement("button", "button secondary deployment-action", label);
+        button.type = "button";
+        button.disabled = disabled;
+
+        if (disabled) {
+            button.title = "Select a verified successful release first.";
+        }
+
+        button.addEventListener("click", () => {
+            handleDeploymentAction(payload, confirmationMessage);
+        });
+
+        return button;
+    }
+
+    function renderDeploymentActions(environment) {
+        const card = document.querySelector(
+            `.deployment-card[data-environment="${environment.environment}"]`
+        );
+
+        if (!card) {
+            return;
+        }
+
+        let actions = card.querySelector(".deployment-actions");
+
+        if (!actions) {
+            actions = createElement("div", "deployment-actions");
+            card.append(actions);
+        }
+
+        actions.replaceChildren();
+
+        const digest = getSelectedVerifiedDigest();
+
+        if (environment.environment === "dev") {
+            actions.append(
+                createDeploymentActionButton(
+                    "Deploy",
+                    {
+                        action: "deploy",
+                        environment: "dev",
+                        digest: digest || ""
+                    },
+                    digest
+                        ? `Deploy ${selectedBuild.release_tag || "the selected release"} to DEV?`
+                        : null,
+                    !digest
+                )
+            );
+        }
+
+        if (environment.environment === "uat") {
+            actions.append(
+                createDeploymentActionButton(
+                    "Deploy",
+                    {
+                        action: "deploy",
+                        environment: "uat",
+                        digest: digest || ""
+                    },
+                    digest
+                        ? `Deploy ${selectedBuild.release_tag || "the selected release"} to UAT?`
+                        : null,
+                    !digest
+                )
+            );
+
+            actions.append(
+                createDeploymentActionButton(
+                    "Promote DEV → UAT",
+                    {
+                        action: "promote",
+                        source: "dev",
+                        target: "uat"
+                    },
+                    "Promote the current verified DEV deployment to UAT?"
+                )
+            );
+        }
+
+        if (environment.environment === "prod") {
+            actions.append(
+                createDeploymentActionButton(
+                    "Deploy",
+                    {
+                        action: "deploy",
+                        environment: "prod",
+                        digest: digest || "",
+                        confirm_prod: true
+                    },
+                    digest
+                        ? `Deploy ${selectedBuild.release_tag || "the selected release"} to PRODUCTION?`
+                        : null,
+                    !digest
+                )
+            );
+
+            actions.append(
+                createDeploymentActionButton(
+                    "Promote UAT → PROD",
+                    {
+                        action: "promote",
+                        source: "uat",
+                        target: "prod",
+                        confirm_prod: true
+                    },
+                    "Promote the current verified UAT deployment to PRODUCTION?"
+                )
+            );
+
+            actions.append(
+                createDeploymentActionButton(
+                    "Rollback",
+                    {
+                        action: "rollback",
+                        environment: "prod",
+                        confirm_prod: true
+                    },
+                    "Rollback PRODUCTION to its previous verified deployment?"
+                )
+            );
+        }
+    }
+
     function renderDeployments(data) {
         const environments = Array.isArray(data.environments)
             ? data.environments
@@ -230,26 +456,41 @@
 
             const digest = observed.digest || desired.digest || "—";
 
+            const currentDeployment =
+                Array.isArray(environment.deployments) &&
+                environment.deployments.length > 0
+                ? environment.deployments[0]
+                : null;
+
+            const release = currentDeployment?.release_tag || "—";
+            const sourceCommit = currentDeployment?.source_commit || "—";
+
             details.innerHTML = `
-                <div>
-                    <span>Release</span>
-                    <strong>—</strong>
-                </div>
-                <div>
-                    <span>Source commit</span>
-                    <code>—</code>
-                </div>
-                <div>
-                    <span>Image digest</span>
-                    <code>${escapeHtml(initialized ? digest : "—")}</code>
-                </div>
-                <div>
-                    <span>Health</span>
-                    <strong class="${health === "healthy" ? "health-ok" : ""}">
-                        ${escapeHtml(deploymentHealthLabel(environment))}
-                    </strong>
-                </div>
-            `;
+            <div>
+                <span>Release</span>
+                <strong>${escapeHtml(release)}</strong>
+            </div>
+            <div>
+                <span>Source commit</span>
+                <code>${escapeHtml(
+                    sourceCommit === "—"
+                        ? "—"
+                        : sourceCommit.substring(0, 8)
+                )}</code>
+            </div>
+            <div>
+                 <span>Image digest</span>
+                 <code>${escapeHtml(initialized ? digest : "—")}</code>
+            </div>
+            <div>
+                <span>Health</span>
+                <strong class="${health === "healthy" ? "health-ok" : ""}">
+                    ${escapeHtml(deploymentHealthLabel(environment))}
+                </strong>
+            </div>
+        `;
+
+            renderDeploymentActions(environment);
         });
 
         renderDeploymentHistory(environments);
@@ -493,8 +734,12 @@
             if (selectedRequestId !== requestId) return;
 
             const build = data.build;
+            selectedBuild = build;
+
             elements.detailTitle.textContent =
                 `${build.release_tag} · ${build.status}`;
+
+            renderDeploymentActionsForAllCards();
 
             addDetail(elements.detailContent, "Request ID", build.request_id, {
                 code: true
@@ -552,6 +797,16 @@
         }
     }
 
+    function renderDeploymentActionsForAllCards() {
+        elements.deploymentCards.forEach(card => {
+            const environment = card.dataset.environment;
+
+            renderDeploymentActions({
+                environment
+            });
+        });
+    }
+
     async function loadDeploymentStatus() {
         try {
             const response = await fetch(API_DEPLOYMENT_STATUS, {
@@ -564,6 +819,7 @@
 
             const data = await response.json();
             renderDeployments(data);
+            renderDeploymentActionsForAllCards();
 
         } catch (error) {
             console.error("Failed to load deployment status:", error);
@@ -596,8 +852,10 @@
 
     elements.closeDetail.addEventListener("click", () => {
         selectedRequestId = null;
+        selectedBuild = null;
         elements.detailPanel.hidden = true;
         renderBuilds();
+        renderDeploymentActionsForAllCards();
     });
 
     loadBuilds();
